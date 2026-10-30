@@ -110,7 +110,7 @@
 <body>
 <div class="stage">
   <div class="phone-wrap">
-    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，光是手指按一下（不划动）不算；一旦检测到真的再划一次/再滚一下（移动幅度突然变大，或滚轮停顿后再滚）立即收起为小组件，不用等上一次惯性放完；点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
+    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，光是手指按一下把列表按停（不划动）不算；一旦列表再次明显加速滚动，或停顿后又开始滚动，立即收起为小组件，不用等上一次惯性放完；点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
     <div class="phone">
       <div class="screen" id="screen">
         <div class="list-wrap">
@@ -153,11 +153,11 @@
       </select>
     </div>
     <div class="field">
-      <label>滑动加速倍数阈值 <b id="wheelAccelVal"></b>×（这一下比上一下明显变大才算重新推动，滚轮/触控板/触屏共用）</label>
+      <label>滑动加速倍数阈值 <b id="wheelAccelVal"></b>×（这一帧列表实际滚动的幅度比上一帧明显变大才算重新推动，滚轮/触控板/触屏通用）</label>
       <input type="range" id="wheelAccelSlider" min="1.2" max="4" step="0.1">
     </div>
     <div class="field">
-      <label>滚轮停顿阈值 <b id="wheelGapVal"></b>ms（兜底：滚轮隔太久没动静也算新的一次，只管滚轮，触屏不用这个值）</label>
+      <label>滚动停顿阈值 <b id="wheelGapVal"></b>ms（兜底：隔太久列表完全没滚动也算新的一次，滚轮/触控板/触屏通用）</label>
       <input type="range" id="wheelGapSlider" min="100" max="1000" step="10">
     </div>
     <div class="field">
@@ -331,18 +331,42 @@ function renderLog(){
 }
 
 // "再次滑动"不能用时间长短去判断——不管是真机惯性滚动还是触控板的平滑滚动，
-// 同一次手势引发的滚动动画可能还没播完，这段时间产生的 scroll/wheel 事件都不算"再次滑动"，
+// 同一次手势引发的滚动动画可能还没播完，这段时间产生的 scroll 都不算"再次滑动"，
 // 哪怕动画还没播完也不该收起；而一旦检测到一次新的滑动动作（不是同一个手势的延续），
 // 要立刻收起——不等它再产生一次 scroll 事件去确认，因为列表可能已经滚到底，新动作本身不会再
 // 触发新的 scroll 事件，等下去就永远等不到。
-// 触屏天然有 touchstart 作为清晰的"新动作开始"信号；鼠标滚轮/触控板没有这种原生信号——
-// 惯性滑行在浏览器里仍然会持续触发 wheel 事件，光靠"隔了多久没动静"只能等惯性自己耗尽，
-// 等于要求用户等动画放完才能算第二次。真正能分辨"手指是不是又主动推了一把"的信号是幅度：
-// 惯性衰减的 delta 幅度只会越来越小，一旦某一下比上一下明显变大（超过 wheelAccelFactor 倍），
-// 就说明是重新开始的一次主动动作；"隔了很久没有任何 wheel 事件"仍保留作兜底信号。
-let lastWheelAt = -Infinity;
-let lastWheelDelta = 0;
-let skipNextWheelAccelCheck = false;
+// 判定信号不用滚轮 deltaY 或触屏手指位移这种"输入设备的原始数据"——曾经试过用触屏
+// touchmove 的位移量比较，结果踩了两个坑：①每次 touchstart 都把比较基准清零，导致
+// 第一下真实划动永远判定为"突然变大"，wheelAccelFactor 滑块对触屏形同虚设；②iOS 上
+// 用手指"抓停"正在惯性滚动的列表后再划动时，WebKit 对 touchmove 的派发会被原生滚动
+// 动画调度延迟/节流，第一下划动量经常量不准，导致真机上明明又划了一次却判定不出来。
+// 改成只看 scrollTop 本身这一帧实际变化了多少——不管这个变化是滚轮、触控板还是手指
+// 拖拽造成的，最终都要落到 scrollTop 的变化上，这是唯一不会被输入设备的事件调度方式
+// 影响的"地面真相"。惯性衰减的变化量只会越来越小，一旦某一帧比上一帧明显变大（超过
+// wheelAccelFactor 倍），就说明是重新开始的一次主动动作；"隔了很久 scrollTop 完全没变化"
+// 仍保留作兜底信号（尤其是手指先按停、停顿一下再真正划动的场景，停顿本身就会先触发这条）。
+let smoothedScrollAbsDelta = 0;
+let skipNextScrollAccelCheck = false;
+
+// 手指没有离开屏幕的整段触摸期间，不管是哪个状态触发的（包括触发展开的那次 flick 本身），
+// 都不该拿它自己后续的滚动去跟自己比"突然变大"——一次连续的真实手指滑动，因为
+// requestAnimationFrame 合帧的关系，相邻两帧合并到的 wheel/touchmove 事件个数会抖动，
+// 同一次匀速甚至持续加速的划动，帧与帧之间的 scrollTop 变化量也可能出现忽大忽小的抖动，
+// 一个 tick 的 skip 不够用，必须覆盖这整段触摸、直到手指离开屏幕（touchend/touchcancel）
+// 为止；松开手指后新按下的那次触摸，才有资格被判定为"新的一次滑动"。鼠标滚轮/触控板没有
+// 触摸起止信号，仍然用"展开那一刻跳过下一个 tick"的办法（已通过真实触控板验证足够用）。
+let touchActive = false;
+let activeTouchId = 0;
+let guardedTouchId = -1;
+screenEl.addEventListener('touchstart', ()=>{
+  touchActive = true;
+  activeTouchId++;
+}, {passive:true});
+// 手指松开的瞬间，原生惯性动画接管，第一帧的滚动量有时会比刚才手指拖拽的最后一帧还大
+// （惯性启动时的速度曲线不是严格单调衔接的），同样需要跳过紧接着的那一个 tick，
+// 避免"手指刚松开，惯性刚接管"这个交接点被误判成"突然变大"。
+screenEl.addEventListener('touchend', ()=>{ touchActive = false; skipNextScrollAccelCheck = true; }, {passive:true});
+screenEl.addEventListener('touchcancel', ()=>{ touchActive = false; skipNextScrollAccelCheck = true; }, {passive:true});
 
 function markPossibleNewGesture(){
   if(menuState === 'expanded'){
@@ -353,11 +377,11 @@ function markPossibleNewGesture(){
 function setMenuState(state, reason){
   if(state === menuState) return;
   menuState = state;
-  // 刚展开的这一下本身就是触发展开的那次推动/划动，不能拿来跟"上一下"比幅度，否则同一个手势
+  // 刚展开的这一下本身就是触发展开的那次推动/划动，不能拿来跟"上一帧"比幅度，否则同一个手势
   // 还没放完就会被误判成"突然变大"而立刻收起
   if(state === 'expanded'){
-    skipNextWheelAccelCheck = true;
-    skipNextTouchAccelCheck = true;
+    skipNextScrollAccelCheck = true;
+    guardedTouchId = touchActive ? activeTouchId : -1;
   }
   fabExpanded.classList.toggle('show', state === 'expanded');
   fabCollapsed.classList.toggle('show', state === 'collapsed');
@@ -388,15 +412,31 @@ function onScroll(){
   const now = performance.now();
   const st = screenEl.scrollTop;
   const dt = now - lastScrollTime;
+  const absDelta = Math.abs(st - lastScrollTop);
   if(dt > 0){
     const instV = (st - lastScrollTop) / dt * 1000;
     velocity = velocity * 0.7 + instV * 0.3;
   }
+  // 幅度突变：这一帧 scrollTop 实际变化的量，比最近几帧的滚动幅度明显变大（超过
+  // wheelAccelFactor 倍），说明是重新主动推了一把，不是同一次惯性的延续。
+  // 拿"上一帧"原始值直接比会踩坑：真实设备原生惯性动画本身帧间幅度就不是严格单调递减的，
+  // 哪怕完全没有新动作，相邻两帧也可能有 ±不小的抖动（采样/取整噪声），阈值调低时
+  // （比如 1.2x）这点抖动就足以被误判成"突然变大"。改成拿当前帧跟"最近几帧的平滑趋势"比，
+  // 既能滤掉这种帧间抖动，真正的主动推一把（通常是好几倍的跳变）仍然轻松超过阈值。
+  // 停顿兜底：距离上一次有任何 scrollTop 变化已经隔了够久（比如手指先按停、停顿后才真正
+  // 划动），哪怕这一帧幅度和平滑趋势差不多也该算新的一次。
+  const sameGuardedTouch = touchActive && activeTouchId === guardedTouchId;
+  const longGap = !sameGuardedTouch && dt > params.wheelGestureGapMs;
+  const suddenlyBigger = !sameGuardedTouch && !skipNextScrollAccelCheck && absDelta > 2 && absDelta > smoothedScrollAbsDelta * params.wheelAccelFactor;
+  if(absDelta > 2 && (longGap || suddenlyBigger)){
+    markPossibleNewGesture();
+  }
+  skipNextScrollAccelCheck = false;
+  smoothedScrollAbsDelta = smoothedScrollAbsDelta * 0.7 + absDelta * 0.3;
   lastScrollTop = st;
   lastScrollTime = now;
   lastActivityAt = now;
-  // 收起判定已经挪到 markPossibleNewGesture 里，一检测到新动作就立刻收起，不等 scroll 事件；
-  // 这里只负责"隐藏态下判断是否该展开"，展开/收起态下 evaluateShow 内部会直接跳过。
+  // "隐藏态下判断是否该展开"；展开/收起态下 evaluateShow 内部会直接跳过。
   evaluateShow(st);
 }
 screenEl.addEventListener('scroll', ()=>{
@@ -404,54 +444,6 @@ screenEl.addEventListener('scroll', ()=>{
     scrollTicking = true;
     requestAnimationFrame(()=>{ onScroll(); scrollTicking = false; });
   }
-}, {passive:true});
-
-// 触屏：光有新的 touchstart 不代表"再次滑动"——iOS 上常见的操作是手指按一下把还在惯性滑动的
-// 列表"按停"，根本没打算再滑，这种单纯的接触不该收起。真正该判定为新动作的是"手指按下后
-// 确实划出了一段明显位移"，而且这段位移要比上一次移动明显变大（跟滚轮同一个思路：
-// 刚接触、还没移动过时 lastTouchMoveDelta 是 0，所以第一次真正的划动必然判定为新动作；
-// 持续拖拽时前后移动幅度相近，不会被误判)。
-let touchActive = false;
-let lastTouchY = 0;
-let lastTouchMoveDelta = 0;
-let skipNextTouchAccelCheck = false;
-
-screenEl.addEventListener('touchstart', e=>{
-  touchActive = true;
-  lastTouchY = e.touches[0].clientY;
-  lastTouchMoveDelta = 0;
-}, {passive:true});
-
-screenEl.addEventListener('touchmove', e=>{
-  if(!touchActive) return;
-  const y = e.touches[0].clientY;
-  const absDelta = Math.abs(lastTouchY - y);
-  lastTouchY = y;
-  const suddenlyBigger = !skipNextTouchAccelCheck && absDelta > 2 && absDelta > lastTouchMoveDelta * params.wheelAccelFactor;
-  if(suddenlyBigger){
-    markPossibleNewGesture();
-  }
-  skipNextTouchAccelCheck = false;
-  lastTouchMoveDelta = absDelta;
-}, {passive:true});
-
-screenEl.addEventListener('touchend', ()=>{ touchActive = false; }, {passive:true});
-screenEl.addEventListener('touchcancel', ()=>{ touchActive = false; }, {passive:true});
-
-// 鼠标滚轮/触控板：没有明确的手势开始信号，靠两个启发式一起判断是否是新的一次滑动——
-// 1）这一下的幅度比上一下明显变大（惯性只会越滑越小，突然变大就是重新主动推了一把）；
-// 2）隔了很久完全没有 wheel 事件（兜底，应付幅度变化不明显的场景）。
-screenEl.addEventListener('wheel', e=>{
-  const now = performance.now();
-  const absDelta = Math.abs(e.deltaY);
-  const longGap = now - lastWheelAt > params.wheelGestureGapMs;
-  const suddenlyBigger = !skipNextWheelAccelCheck && absDelta > 4 && absDelta > lastWheelDelta * params.wheelAccelFactor;
-  if(longGap || suddenlyBigger){
-    markPossibleNewGesture();
-  }
-  skipNextWheelAccelCheck = false;
-  lastWheelDelta = absDelta;
-  lastWheelAt = now;
 }, {passive:true});
 
 fabCollapsed.addEventListener('click', ()=>{
