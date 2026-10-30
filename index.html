@@ -23,8 +23,7 @@
     user-select:none;-webkit-user-select:none;
   }
   .phone img{-webkit-user-drag:none;user-drag:none;pointer-events:none}
-  .screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;cursor:grab}
-  .screen:active{cursor:grabbing}
+  .screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
   .screen::-webkit-scrollbar{display:none}
   .list-wrap{padding-bottom:170px}
   .list-wrap img{width:100%;display:block}
@@ -111,7 +110,7 @@
 <body>
 <div class="stage">
   <div class="phone-wrap">
-    <div class="hint">快速向下滑动触发悬浮菜单；菜单展开后再次主动滑动会收到右侧变成小组件，点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
+    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后再发生一次滚动就会收到右侧变成小组件，点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
     <div class="phone">
       <div class="screen" id="screen">
         <div class="list-wrap">
@@ -270,7 +269,6 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
 
 // 菜单有三态：hidden（不可见）/ expanded（完整药丸）/ collapsed（贴边小组件，占位图形，等真实素材替换）
 let menuState = 'hidden';
-let isTouching = false;
 let lastScrollTop = screenEl.scrollTop;
 let lastScrollTime = performance.now();
 let lastActivityAt = performance.now();
@@ -304,9 +302,15 @@ function renderLog(){
   }).join('');
 }
 
+// 展开后要等这段连续滚动完全平息，才能把"下一次滚动"算作独立的一次新动作去触发收起——
+// 否则快速滑动/滚轮本身就是一长串连续 scroll 事件，刚展开的下一帧就会被当成"再次滚动"立刻收起
+const SETTLE_MS = 120;
+let expandedSettled = false;
+
 function setMenuState(state, reason){
   if(state === menuState) return;
   menuState = state;
+  if(state === 'expanded') expandedSettled = false;
   fabExpanded.classList.toggle('show', state === 'expanded');
   fabCollapsed.classList.toggle('show', state === 'collapsed');
   roMenuState.textContent = STATE_LABEL[state];
@@ -328,8 +332,7 @@ function evaluateShow(st){
   if(distHit) parts.push(`距离 > ${params.distanceThreshold}%屏高(${Math.round(distPx)}pt)`);
   if(velHit) parts.push(`速度 > ${params.velocityThreshold}pt/s`);
   const reason = parts.join(' & ') || '规则命中';
-  // 触发时手指还按在屏幕上，直接以收起态出现，不挡内容
-  setMenuState(isTouching ? 'collapsed' : 'expanded', reason);
+  setMenuState('expanded', reason);
 }
 
 let scrollTicking = false;
@@ -344,7 +347,16 @@ function onScroll(){
   lastScrollTop = st;
   lastScrollTime = now;
   lastActivityAt = now;
-  evaluateShow(st);
+  // 展开态下只要再发生一次滚动（不管是触摸拖动、鼠标滚轮还是触控板），就立即收起成小组件，
+  // 判定条件统一只看 scroll 事件本身，不再依赖触摸/指针的接触状态（那条路径在真机和桌面模拟器上都踩过坑）
+  // 但触发展开的那一串连续滚动还没平息时不算"再次滚动"，否则刚展开就会被同一个手势立刻收起
+  if(menuState === 'expanded'){
+    if(expandedSettled){
+      setMenuState('collapsed', '再次滚动，自动收起');
+    }
+  }else{
+    evaluateShow(st);
+  }
 }
 screenEl.addEventListener('scroll', ()=>{
   if(!scrollTicking){
@@ -352,63 +364,6 @@ screenEl.addEventListener('scroll', ()=>{
     requestAnimationFrame(()=>{ onScroll(); scrollTicking = false; });
   }
 }, {passive:true});
-
-// 浏览器一旦判定触摸手势是在做原生滚动，会直接 fire pointercancel 把 pointer 事件流砍断，
-// 后续不会再有 pointermove —— 之前用 pointer 事件判断"手指是否还在主动滑动"在真机上完全失效就是这个原因。
-// touch 事件不会被这样接管，滚动过程中 touchmove 会一直正常触发，所以收起判定改用原生 touch 事件。
-let touchStartScrollTop = 0;
-
-function checkActiveScroll(){
-  if(isTouching && menuState === 'expanded' && Math.abs(screenEl.scrollTop - touchStartScrollTop) > 2){
-    setMenuState('collapsed', '主动滑动中，自动收起');
-  }
-}
-screenEl.addEventListener('touchstart', ()=>{
-  isTouching = true;
-  touchStartScrollTop = screenEl.scrollTop;
-  lastActivityAt = performance.now();
-}, {passive:true});
-screenEl.addEventListener('touchmove', ()=>{
-  lastActivityAt = performance.now();
-  checkActiveScroll();
-}, {passive:true});
-window.addEventListener('touchend', ()=>{
-  isTouching = false;
-  lastActivityAt = performance.now();
-}, {passive:true});
-window.addEventListener('touchcancel', ()=>{
-  isTouching = false;
-  lastActivityAt = performance.now();
-}, {passive:true});
-
-// 鼠标点击拖拽模拟滚动（没有"原生滚动接管"这回事，pointer 事件对鼠标是可靠的，只接管 pointerType === 'mouse'）
-let dragState = null;
-
-function handlePointerDown(e){
-  if(e.pointerType !== 'mouse') return;
-  isTouching = true;
-  touchStartScrollTop = screenEl.scrollTop;
-  lastActivityAt = performance.now();
-  dragState = { startY: e.clientY, startScrollTop: screenEl.scrollTop };
-  try{ screenEl.setPointerCapture(e.pointerId); }catch(err){}
-}
-function handlePointerMove(e){
-  if(e.pointerType !== 'mouse' || !dragState) return;
-  lastActivityAt = performance.now();
-  const delta = e.clientY - dragState.startY;
-  screenEl.scrollTop = dragState.startScrollTop - delta;
-  checkActiveScroll();
-}
-function handlePointerUp(e){
-  if(e.pointerType && e.pointerType !== 'mouse') return;
-  isTouching = false;
-  lastActivityAt = performance.now();
-  dragState = null;
-}
-screenEl.addEventListener('pointerdown', handlePointerDown, {passive:true});
-screenEl.addEventListener('pointermove', handlePointerMove, {passive:true});
-window.addEventListener('pointerup', handlePointerUp, {passive:true});
-window.addEventListener('pointercancel', handlePointerUp, {passive:true});
 
 fabCollapsed.addEventListener('click', ()=>{
   lastActivityAt = performance.now();
@@ -434,6 +389,10 @@ function idleLoop(){
     }else if(params.hideNearTop && nearTop){
       setMenuState('hidden', '回到顶部附近');
     }
+  }
+
+  if(menuState === 'expanded' && !expandedSettled && (now - lastScrollTime) > SETTLE_MS){
+    expandedSettled = true;
   }
 
   roScrollTop.textContent = Math.round(screenEl.scrollTop);
