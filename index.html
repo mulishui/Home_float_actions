@@ -111,7 +111,7 @@
 <body>
 <div class="stage">
   <div class="phone-wrap">
-    <div class="hint">快速向下滑动触发悬浮菜单；手指按住屏幕时菜单会收到右侧变成小组件，松手后点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
+    <div class="hint">快速向下滑动触发悬浮菜单；菜单展开后再次主动滑动会收到右侧变成小组件，点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
     <div class="phone">
       <div class="screen" id="screen">
         <div class="list-wrap">
@@ -344,7 +344,14 @@ function onScroll(){
   lastScrollTop = st;
   lastScrollTime = now;
   lastActivityAt = now;
-  evaluateShow(st);
+  // 收起要绑定"用户正在主动滑动"（isTouching 为真时触发的 scroll），
+  // 而不是手指松开后列表自己的惯性滚动动效——惯性阶段也会持续触发 scroll 事件，
+  // 如果不加 isTouching 判断，刚展开就会被惯性滚动立刻误收起
+  if(menuState === 'expanded' && isTouching){
+    setMenuState('collapsed', '主动滑动中，自动收起');
+  }else{
+    evaluateShow(st);
+  }
 }
 screenEl.addEventListener('scroll', ()=>{
   if(!scrollTicking){
@@ -359,9 +366,6 @@ let dragState = null;
 function handlePointerDown(e){
   isTouching = true;
   lastActivityAt = performance.now();
-  if(menuState === 'expanded'){
-    setMenuState('collapsed', '手指触碰屏幕，自动收起');
-  }
   if(e.pointerType === 'mouse'){
     dragState = { startY: e.clientY, startScrollTop: screenEl.scrollTop };
     try{ screenEl.setPointerCapture(e.pointerId); }catch(err){}
