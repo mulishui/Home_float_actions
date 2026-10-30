@@ -110,7 +110,7 @@
 <body>
 <div class="stage">
   <div class="phone-wrap">
-    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，一旦检测到再滑一次（手指重新触摸，或触控板/滚轮幅度突然变大/停顿后再滚）立即收起为小组件，不用等上一次惯性放完；点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
+    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，光是手指按一下（不划动）不算；一旦检测到真的再划一次/再滚一下（移动幅度突然变大，或滚轮停顿后再滚）立即收起为小组件，不用等上一次惯性放完；点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
     <div class="phone">
       <div class="screen" id="screen">
         <div class="list-wrap">
@@ -153,7 +153,7 @@
       </select>
     </div>
     <div class="field">
-      <label>滚轮加速倍数阈值 <b id="wheelAccelVal"></b>×（这一下比上一下明显变大才算重新推动，触屏不用这个值）</label>
+      <label>滑动加速倍数阈值 <b id="wheelAccelVal"></b>×（这一下比上一下明显变大才算重新推动，滚轮/触控板/触屏共用）</label>
       <input type="range" id="wheelAccelSlider" min="1.2" max="4" step="0.1">
     </div>
     <div class="field">
@@ -187,7 +187,7 @@ const DEFAULT_PARAMS = {
   velocityThreshold: 900,
   combine: 'VEL', // 距离判据价值不大，默认只看速度；仍保留距离/组合方式供对比实验
   wheelGestureGapMs: 300, // 两次滚轮之间隔多久才算"另一次新的滑动"（兜底信号，触屏用 touchstart 判断新手势，不用这个值）
-  wheelAccelFactor: 2.2, // 本次滚轮幅度比上一次大超过这个倍数，判定为手指重新主动推了一把（惯性衰减只会越来越小，不会突然变大）
+  wheelAccelFactor: 2.2, // 本次滑动幅度（滚轮 deltaY 或触屏移动距离）比上一次大超过这个倍数，判定为重新主动推了一把（惯性/平移衰减只会越来越小，不会突然变大）
   idleTimeout: 1500,
   hideNearTop: false
 };
@@ -353,7 +353,12 @@ function markPossibleNewGesture(){
 function setMenuState(state, reason){
   if(state === menuState) return;
   menuState = state;
-  if(state === 'expanded') skipNextWheelAccelCheck = true; // 刚展开的这一下本身就是触发展开的那次推动，不能拿来跟"上一下"比幅度
+  // 刚展开的这一下本身就是触发展开的那次推动/划动，不能拿来跟"上一下"比幅度，否则同一个手势
+  // 还没放完就会被误判成"突然变大"而立刻收起
+  if(state === 'expanded'){
+    skipNextWheelAccelCheck = true;
+    skipNextTouchAccelCheck = true;
+  }
   fabExpanded.classList.toggle('show', state === 'expanded');
   fabCollapsed.classList.toggle('show', state === 'collapsed');
   roMenuState.textContent = STATE_LABEL[state];
@@ -401,8 +406,37 @@ screenEl.addEventListener('scroll', ()=>{
   }
 }, {passive:true});
 
-// 触屏：每一次新的手指接触都是一次明确的新手势，不管上一次滚动的惯性动画有没有播完
-screenEl.addEventListener('touchstart', markPossibleNewGesture, {passive:true});
+// 触屏：光有新的 touchstart 不代表"再次滑动"——iOS 上常见的操作是手指按一下把还在惯性滑动的
+// 列表"按停"，根本没打算再滑，这种单纯的接触不该收起。真正该判定为新动作的是"手指按下后
+// 确实划出了一段明显位移"，而且这段位移要比上一次移动明显变大（跟滚轮同一个思路：
+// 刚接触、还没移动过时 lastTouchMoveDelta 是 0，所以第一次真正的划动必然判定为新动作；
+// 持续拖拽时前后移动幅度相近，不会被误判)。
+let touchActive = false;
+let lastTouchY = 0;
+let lastTouchMoveDelta = 0;
+let skipNextTouchAccelCheck = false;
+
+screenEl.addEventListener('touchstart', e=>{
+  touchActive = true;
+  lastTouchY = e.touches[0].clientY;
+  lastTouchMoveDelta = 0;
+}, {passive:true});
+
+screenEl.addEventListener('touchmove', e=>{
+  if(!touchActive) return;
+  const y = e.touches[0].clientY;
+  const absDelta = Math.abs(lastTouchY - y);
+  lastTouchY = y;
+  const suddenlyBigger = !skipNextTouchAccelCheck && absDelta > 2 && absDelta > lastTouchMoveDelta * params.wheelAccelFactor;
+  if(suddenlyBigger){
+    markPossibleNewGesture();
+  }
+  skipNextTouchAccelCheck = false;
+  lastTouchMoveDelta = absDelta;
+}, {passive:true});
+
+screenEl.addEventListener('touchend', ()=>{ touchActive = false; }, {passive:true});
+screenEl.addEventListener('touchcancel', ()=>{ touchActive = false; }, {passive:true});
 
 // 鼠标滚轮/触控板：没有明确的手势开始信号，靠两个启发式一起判断是否是新的一次滑动——
 // 1）这一下的幅度比上一下明显变大（惯性只会越滑越小，突然变大就是重新主动推了一把）；
