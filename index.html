@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>滚动悬浮菜单 Demo · 阈值实验工具</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    font-family:"SF Pro Text","SF Pro Display",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    background:#f5f7fa;color:#1c1d21;
+  }
+  .stage{display:flex;gap:24px;justify-content:center;align-items:flex-start;flex-wrap:wrap;padding:32px 16px 60px}
+
+  .phone-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;flex:0 0 auto}
+  .hint{text-align:center;font-size:12px;color:#a8abb3;max-width:340px}
+
+  /* 手机尺寸按 iPhone 17 Pro 逻辑分辨率模拟（402 x 874pt），素材按 @2x 导出，刚好 804px 宽，1:1 对齐无需额外换算 */
+  .phone{
+    width:402px;height:874px;border-radius:55px;background:#f5f7fa;
+    box-shadow:0 18px 44px rgba(20,22,30,.16),0 0 0 9px #1c1d21,0 0 0 10px #35373f;
+    overflow:hidden;position:relative;
+    user-select:none;-webkit-user-select:none;
+  }
+  .phone img{-webkit-user-drag:none;user-drag:none;pointer-events:none}
+  .screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;cursor:grab}
+  .screen:active{cursor:grabbing}
+  .screen::-webkit-scrollbar{display:none}
+  .list-wrap{padding-bottom:170px}
+  .list-wrap img{width:100%;display:block}
+
+  .tab-bar{
+    position:absolute;left:0;right:0;bottom:0;z-index:5;pointer-events:none;
+  }
+  .tab-bar img{width:100%;display:block}
+
+  .fab-expanded{
+    position:absolute;left:50%;bottom:92px;width:226px;z-index:6;
+    transform:translate(-50%,10px);opacity:0;pointer-events:none;
+    transition:opacity .22s ease,transform .22s ease;
+    filter:drop-shadow(0 8px 20px rgba(20,22,30,.18));
+  }
+  .fab-expanded.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+  .fab-expanded img{width:100%;display:block}
+
+  /* 收起态是占位用的简单图形，等拿到真实素材后替换 */
+  .fab-collapsed{
+    position:absolute;right:0;bottom:108px;width:40px;height:40px;z-index:6;
+    border:none;border-radius:20px 0 0 20px;background:#fff;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    box-shadow:0 6px 16px rgba(20,22,30,.18);
+    opacity:0;pointer-events:none;transform:translateX(14px);
+    transition:opacity .2s ease,transform .2s ease;
+  }
+  .fab-collapsed.show{opacity:1;transform:translateX(0);pointer-events:auto}
+  .fab-collapsed:active{background:#f5f6f8}
+
+  /* ---- 调参面板 ---- */
+  .panel{
+    width:300px;flex:0 0 auto;background:#fff;border-radius:16px;
+    box-shadow:0 1px 3px rgba(20,22,30,.08);padding:16px;font-size:13px;
+  }
+  .panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .panel-head span{font-size:15px;font-weight:700}
+  .panel-head button{
+    border:none;background:#eceef2;color:#1c1d21;font-size:12px;font-weight:600;
+    border-radius:10px;padding:6px 10px;cursor:pointer;
+  }
+  .panel-head button:active{background:#dfe2e8}
+  .field{margin-bottom:14px}
+  .field label{display:flex;justify-content:space-between;font-size:12.5px;color:#55585f;margin-bottom:6px}
+  .field label b{color:#1c1d21;font-weight:600}
+  .field input[type=range]{width:100%}
+  .field select{width:100%;padding:7px 8px;border-radius:8px;border:1px solid #dfe2e8;font-size:13px;background:#fff}
+  .checkbox-field label{display:flex;align-items:center;gap:8px;font-size:13px;color:#1c1d21}
+  .checkbox-field input{width:16px;height:16px}
+
+  .readout{background:#f5f6f8;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;line-height:1.8}
+  .readout b{font-weight:700}
+
+  .log-head{font-size:12.5px;font-weight:700;color:#55585f;margin-bottom:6px}
+  .log{max-height:220px;overflow-y:auto;border:1px solid #eceef2;border-radius:10px}
+  .log-row{display:flex;flex-direction:column;gap:2px;padding:7px 10px;border-bottom:1px solid #f0f1f4;font-size:11.5px}
+  .log-row:last-child{border-bottom:none}
+  .log-type{font-weight:700;font-size:11px}
+  .log-type.expanded{color:#0a84ff}
+  .log-type.collapsed{color:#ff9500}
+  .log-type.hidden{color:#a8abb3}
+  .log-time{color:#a8abb3;font-size:10.5px}
+  .log-reason{color:#1c1d21}
+  .log-meta{color:#a8abb3}
+  .log-empty{padding:12px;text-align:center;color:#a8abb3;font-size:12px}
+
+  @media (max-width:760px){
+    .stage{align-items:center}
+    .panel{width:100%;max-width:340px}
+  }
+
+  /* 真机上直接全屏当成"真实 app 页面"测试，隐藏说明文字/调参面板/手机壳装饰，只留可交互的屏幕内容 */
+  @media (max-width:600px){
+    body{overflow:hidden}
+    .stage{padding:0;gap:0;height:100dvh}
+    .phone-wrap{width:100%;height:100%;gap:0}
+    .hint,.panel{display:none}
+    .phone{
+      width:100%;height:100dvh;border-radius:0;box-shadow:none;background:#f5f7fa;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="phone-wrap">
+    <div class="hint">快速向下滑动触发悬浮菜单；手指按住屏幕时菜单会收到右侧变成小组件，松手后点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
+    <div class="phone">
+      <div class="screen" id="screen">
+        <div class="list-wrap">
+          <img src="assets/device-list@2x.png" alt="device list">
+        </div>
+      </div>
+      <div class="tab-bar">
+        <img src="assets/tab-bar@2x.png" alt="tab bar">
+      </div>
+      <div class="fab-expanded" id="fabExpanded">
+        <img src="assets/floating-menu@2x.png" alt="floating menu">
+      </div>
+      <button class="fab-collapsed" id="fabCollapsed" type="button" aria-label="展开悬浮菜单">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#1c1d21" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <span>出现/消失规则</span>
+      <button id="resetBtn" type="button">恢复默认</button>
+    </div>
+
+    <div class="field">
+      <label>距离阈值 <b id="distVal"></b>% 屏高（约 <span id="distPxHint"></span>pt）</label>
+      <input type="range" id="distSlider" min="10" max="150" step="1">
+    </div>
+    <div class="field">
+      <label>速度阈值 <b id="velVal"></b>pt/s</label>
+      <input type="range" id="velSlider" min="100" max="4000" step="50">
+    </div>
+    <div class="field">
+      <label>组合方式</label>
+      <select id="combineSelect">
+        <option value="OR">任一满足（距离 OR 速度）</option>
+        <option value="AND">都要满足（距离 AND 速度）</option>
+        <option value="DIST">只看距离</option>
+        <option value="VEL">只看速度</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>空闲超时 <b id="idleVal"></b>ms</label>
+      <input type="range" id="idleSlider" min="300" max="5000" step="100">
+    </div>
+    <div class="field checkbox-field">
+      <label><input type="checkbox" id="hideNearTopToggle"> 回到顶部附近也立即隐藏</label>
+    </div>
+
+    <div class="readout">
+      <div>scrollTop：<b id="roScrollTop">0</b> pt</div>
+      <div>velocity：<b id="roVelocity">0</b> pt/s</div>
+      <div>菜单状态：<b id="roMenuState">隐藏</b></div>
+    </div>
+
+    <div class="log-head">事件日志（最近 20 条）</div>
+    <div class="log" id="logList"><div class="log-empty">还没有触发记录</div></div>
+  </aside>
+</div>
+
+<script>
+/* ---- 出现/消失规则引擎 ---- */
+const STORAGE_KEY = 'scrollMenuDemoParams';
+const DEFAULT_PARAMS = {
+  distanceThreshold: 48, // 屏幕高度百分比，而非绝对 px —— 避免不同分辨率设备上体感不一致
+  velocityThreshold: 900,
+  combine: 'VEL', // 距离判据价值不大，默认只看速度；仍保留距离/组合方式供对比实验
+  idleTimeout: 1500,
+  hideNearTop: false
+};
+
+function loadParams(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      const merged = Object.assign({}, DEFAULT_PARAMS, JSON.parse(raw));
+      // 兼容旧版本 localStorage 里存的绝对 px 值（超出百分比滑块范围则丢弃，回退默认）
+      if(merged.distanceThreshold < 10 || merged.distanceThreshold > 150){
+        merged.distanceThreshold = DEFAULT_PARAMS.distanceThreshold;
+      }
+      return merged;
+    }
+  }catch(e){}
+  return Object.assign({}, DEFAULT_PARAMS);
+}
+function saveParams(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(params));
+}
+
+let params = loadParams();
+
+const screenEl = document.getElementById('screen');
+const fabExpanded = document.getElementById('fabExpanded');
+const fabCollapsed = document.getElementById('fabCollapsed');
+
+const distSlider = document.getElementById('distSlider');
+const velSlider = document.getElementById('velSlider');
+const combineSelect = document.getElementById('combineSelect');
+const idleSlider = document.getElementById('idleSlider');
+const hideNearTopToggle = document.getElementById('hideNearTopToggle');
+const distVal = document.getElementById('distVal');
+const distPxHint = document.getElementById('distPxHint');
+const velVal = document.getElementById('velVal');
+const idleVal = document.getElementById('idleVal');
+const roScrollTop = document.getElementById('roScrollTop');
+const roVelocity = document.getElementById('roVelocity');
+const roMenuState = document.getElementById('roMenuState');
+const logList = document.getElementById('logList');
+
+function distThresholdPx(){
+  return screenEl.clientHeight * (params.distanceThreshold / 100);
+}
+
+function syncUIFromParams(){
+  distSlider.value = params.distanceThreshold;
+  distVal.textContent = params.distanceThreshold;
+  distPxHint.textContent = Math.round(distThresholdPx());
+  velSlider.value = params.velocityThreshold;
+  velVal.textContent = params.velocityThreshold;
+  combineSelect.value = params.combine;
+  idleSlider.value = params.idleTimeout;
+  idleVal.textContent = params.idleTimeout;
+  hideNearTopToggle.checked = params.hideNearTop;
+}
+syncUIFromParams();
+
+distSlider.addEventListener('input', e=>{
+  params.distanceThreshold = +e.target.value;
+  distVal.textContent = params.distanceThreshold;
+  distPxHint.textContent = Math.round(distThresholdPx());
+  saveParams();
+});
+velSlider.addEventListener('input', e=>{
+  params.velocityThreshold = +e.target.value;
+  velVal.textContent = params.velocityThreshold;
+  saveParams();
+});
+combineSelect.addEventListener('change', e=>{
+  params.combine = e.target.value;
+  saveParams();
+});
+idleSlider.addEventListener('input', e=>{
+  params.idleTimeout = +e.target.value;
+  idleVal.textContent = params.idleTimeout;
+  saveParams();
+});
+hideNearTopToggle.addEventListener('change', e=>{
+  params.hideNearTop = e.target.checked;
+  saveParams();
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  params = Object.assign({}, DEFAULT_PARAMS);
+  syncUIFromParams();
+  saveParams();
+});
+
+// 菜单有三态：hidden（不可见）/ expanded（完整药丸）/ collapsed（贴边小组件，占位图形，等真实素材替换）
+let menuState = 'hidden';
+let isTouching = false;
+let lastScrollTop = screenEl.scrollTop;
+let lastScrollTime = performance.now();
+let lastActivityAt = performance.now();
+let velocity = 0;
+let eventLog = [];
+
+const STATE_LABEL = { hidden: '隐藏', expanded: '展开', collapsed: '收起' };
+
+function logEvent(type, reason, meta){
+  eventLog.unshift({
+    time: new Date(),
+    type, reason,
+    scrollTop: Math.round(meta.scrollTop),
+    velocity: Math.round(meta.velocity)
+  });
+  if(eventLog.length > 20) eventLog.length = 20;
+  renderLog();
+}
+function renderLog(){
+  if(eventLog.length === 0){
+    logList.innerHTML = '<div class="log-empty">还没有触发记录</div>';
+    return;
+  }
+  logList.innerHTML = eventLog.map(r=>{
+    const time = r.time.toLocaleTimeString('zh-CN', {hour12:false}) + '.' + String(r.time.getMilliseconds()).padStart(3,'0');
+    return `<div class="log-row">
+      <span><span class="log-type ${r.type}">${STATE_LABEL[r.type]}</span> <span class="log-time">${time}</span></span>
+      <span class="log-reason">${r.reason}</span>
+      <span class="log-meta">scrollTop ${r.scrollTop}pt · velocity ${r.velocity}pt/s</span>
+    </div>`;
+  }).join('');
+}
+
+function setMenuState(state, reason){
+  if(state === menuState) return;
+  menuState = state;
+  fabExpanded.classList.toggle('show', state === 'expanded');
+  fabCollapsed.classList.toggle('show', state === 'collapsed');
+  roMenuState.textContent = STATE_LABEL[state];
+  logEvent(state, reason, {scrollTop: screenEl.scrollTop, velocity});
+}
+
+function evaluateShow(st){
+  if(menuState !== 'hidden') return;
+  const distPx = distThresholdPx();
+  const distHit = st > distPx;
+  const velHit = Math.abs(velocity) > params.velocityThreshold;
+  let hit;
+  if(params.combine === 'AND') hit = distHit && velHit;
+  else if(params.combine === 'DIST') hit = distHit;
+  else if(params.combine === 'VEL') hit = velHit;
+  else hit = distHit || velHit;
+  if(!hit) return;
+  const parts = [];
+  if(distHit) parts.push(`距离 > ${params.distanceThreshold}%屏高(${Math.round(distPx)}pt)`);
+  if(velHit) parts.push(`速度 > ${params.velocityThreshold}pt/s`);
+  const reason = parts.join(' & ') || '规则命中';
+  // 触发时手指还按在屏幕上，直接以收起态出现，不挡内容
+  setMenuState(isTouching ? 'collapsed' : 'expanded', reason);
+}
+
+let scrollTicking = false;
+function onScroll(){
+  const now = performance.now();
+  const st = screenEl.scrollTop;
+  const dt = now - lastScrollTime;
+  if(dt > 0){
+    const instV = (st - lastScrollTop) / dt * 1000;
+    velocity = velocity * 0.7 + instV * 0.3;
+  }
+  lastScrollTop = st;
+  lastScrollTime = now;
+  lastActivityAt = now;
+  evaluateShow(st);
+}
+screenEl.addEventListener('scroll', ()=>{
+  if(!scrollTicking){
+    scrollTicking = true;
+    requestAnimationFrame(()=>{ onScroll(); scrollTicking = false; });
+  }
+}, {passive:true});
+
+// 鼠标用点击拖拽模拟触摸滚动（触摸屏本身已经有原生滚动，这里只接管 pointerType === 'mouse'）
+let dragState = null;
+
+function handlePointerDown(e){
+  isTouching = true;
+  lastActivityAt = performance.now();
+  if(menuState === 'expanded'){
+    setMenuState('collapsed', '手指触碰屏幕，自动收起');
+  }
+  if(e.pointerType === 'mouse'){
+    dragState = { startY: e.clientY, startScrollTop: screenEl.scrollTop };
+    try{ screenEl.setPointerCapture(e.pointerId); }catch(err){}
+  }
+}
+function handlePointerMove(e){
+  lastActivityAt = performance.now();
+  if(dragState && e.pointerType === 'mouse'){
+    const delta = e.clientY - dragState.startY;
+    screenEl.scrollTop = dragState.startScrollTop - delta;
+  }
+}
+function handlePointerUp(){
+  isTouching = false;
+  lastActivityAt = performance.now();
+  dragState = null;
+}
+screenEl.addEventListener('pointerdown', handlePointerDown, {passive:true});
+screenEl.addEventListener('pointermove', handlePointerMove, {passive:true});
+window.addEventListener('pointerup', handlePointerUp, {passive:true});
+window.addEventListener('pointercancel', handlePointerUp, {passive:true});
+
+fabCollapsed.addEventListener('click', ()=>{
+  lastActivityAt = performance.now();
+  if(menuState === 'collapsed'){
+    setMenuState('expanded', '点击收起态小组件，展开');
+  }
+});
+
+function idleLoop(){
+  const now = performance.now();
+
+  const sinceScroll = now - lastScrollTime;
+  if(sinceScroll > 100 && Math.abs(velocity) > 1){
+    velocity *= 0.85;
+    if(Math.abs(velocity) < 1) velocity = 0;
+  }
+
+  if(menuState !== 'hidden'){
+    const idleFor = now - lastActivityAt;
+    const nearTop = screenEl.scrollTop < distThresholdPx() * 0.3;
+    if(idleFor > params.idleTimeout){
+      setMenuState('hidden', `静止超过 ${params.idleTimeout}ms`);
+    }else if(params.hideNearTop && nearTop){
+      setMenuState('hidden', '回到顶部附近');
+    }
+  }
+
+  roScrollTop.textContent = Math.round(screenEl.scrollTop);
+  roVelocity.textContent = Math.round(velocity);
+
+  requestAnimationFrame(idleLoop);
+}
+requestAnimationFrame(idleLoop);
+</script>
+</body>
+</html>
