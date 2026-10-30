@@ -110,7 +110,7 @@
 <body>
 <div class="stage">
   <div class="phone-wrap">
-    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，一旦检测到再滑一次（手指重新触摸，或滚轮停顿后再滚）立即收起为小组件，点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
+    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，一旦检测到再滑一次（手指重新触摸，或触控板/滚轮幅度突然变大/停顿后再滚）立即收起为小组件，不用等上一次惯性放完；点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
     <div class="phone">
       <div class="screen" id="screen">
         <div class="list-wrap">
@@ -153,7 +153,11 @@
       </select>
     </div>
     <div class="field">
-      <label>滚轮间隔阈值 <b id="wheelGapVal"></b>ms（触屏按重新触摸判新手势，这个值只管滚轮/触控板）</label>
+      <label>滚轮加速倍数阈值 <b id="wheelAccelVal"></b>×（这一下比上一下明显变大才算重新推动，触屏不用这个值）</label>
+      <input type="range" id="wheelAccelSlider" min="1.2" max="4" step="0.1">
+    </div>
+    <div class="field">
+      <label>滚轮停顿阈值 <b id="wheelGapVal"></b>ms（兜底：隔太久没动静也算新的一次，触屏按重新触摸判新手势）</label>
       <input type="range" id="wheelGapSlider" min="100" max="1000" step="10">
     </div>
     <div class="field">
@@ -182,7 +186,8 @@ const DEFAULT_PARAMS = {
   distanceThreshold: 48, // 屏幕高度百分比，而非绝对 px —— 避免不同分辨率设备上体感不一致
   velocityThreshold: 900,
   combine: 'VEL', // 距离判据价值不大，默认只看速度；仍保留距离/组合方式供对比实验
-  wheelGestureGapMs: 300, // 两次滚轮之间隔多久才算"另一次新的滑动"（触屏用 touchstart 判断新手势，不用这个值）
+  wheelGestureGapMs: 300, // 两次滚轮之间隔多久才算"另一次新的滑动"（兜底信号，触屏用 touchstart 判断新手势，不用这个值）
+  wheelAccelFactor: 2.2, // 本次滚轮幅度比上一次大超过这个倍数，判定为手指重新主动推了一把（惯性衰减只会越来越小，不会突然变大）
   idleTimeout: 1500,
   hideNearTop: false
 };
@@ -214,12 +219,14 @@ const fabCollapsed = document.getElementById('fabCollapsed');
 const distSlider = document.getElementById('distSlider');
 const velSlider = document.getElementById('velSlider');
 const combineSelect = document.getElementById('combineSelect');
+const wheelAccelSlider = document.getElementById('wheelAccelSlider');
 const wheelGapSlider = document.getElementById('wheelGapSlider');
 const idleSlider = document.getElementById('idleSlider');
 const hideNearTopToggle = document.getElementById('hideNearTopToggle');
 const distVal = document.getElementById('distVal');
 const distPxHint = document.getElementById('distPxHint');
 const velVal = document.getElementById('velVal');
+const wheelAccelVal = document.getElementById('wheelAccelVal');
 const wheelGapVal = document.getElementById('wheelGapVal');
 const idleVal = document.getElementById('idleVal');
 const roScrollTop = document.getElementById('roScrollTop');
@@ -238,6 +245,8 @@ function syncUIFromParams(){
   velSlider.value = params.velocityThreshold;
   velVal.textContent = params.velocityThreshold;
   combineSelect.value = params.combine;
+  wheelAccelSlider.value = params.wheelAccelFactor;
+  wheelAccelVal.textContent = params.wheelAccelFactor;
   wheelGapSlider.value = params.wheelGestureGapMs;
   wheelGapVal.textContent = params.wheelGestureGapMs;
   idleSlider.value = params.idleTimeout;
@@ -259,6 +268,11 @@ velSlider.addEventListener('input', e=>{
 });
 combineSelect.addEventListener('change', e=>{
   params.combine = e.target.value;
+  saveParams();
+});
+wheelAccelSlider.addEventListener('input', e=>{
+  params.wheelAccelFactor = +e.target.value;
+  wheelAccelVal.textContent = params.wheelAccelFactor;
   saveParams();
 });
 wheelGapSlider.addEventListener('input', e=>{
@@ -316,25 +330,30 @@ function renderLog(){
   }).join('');
 }
 
-// "再次滑动"不能用时间长短去判断——不管是真机惯性滚动还是鼠标滚轮的平滑滚动，
-// 同一次手势引发的滚动动画可能还没播完，这段时间产生的 scroll 事件都不算"再次滑动"，
+// "再次滑动"不能用时间长短去判断——不管是真机惯性滚动还是触控板的平滑滚动，
+// 同一次手势引发的滚动动画可能还没播完，这段时间产生的 scroll/wheel 事件都不算"再次滑动"，
 // 哪怕动画还没播完也不该收起；而一旦检测到一次新的滑动动作（不是同一个手势的延续），
-// 就算上一次的滚动动画还没放完，也要立刻收起。
-// 触屏天然有 touchstart 作为清晰的"新动作开始"信号；鼠标滚轮/触控板没有这种信号，
-// 只能靠"滚轮事件之间隔了多久"来猜一次新的滑动（间隔超过 wheelGestureGapMs 就认为是另一次）。
-let awaitingCollapseScroll = false;
+// 要立刻收起——不等它再产生一次 scroll 事件去确认，因为列表可能已经滚到底，新动作本身不会再
+// 触发新的 scroll 事件，等下去就永远等不到。
+// 触屏天然有 touchstart 作为清晰的"新动作开始"信号；鼠标滚轮/触控板没有这种原生信号——
+// 惯性滑行在浏览器里仍然会持续触发 wheel 事件，光靠"隔了多久没动静"只能等惯性自己耗尽，
+// 等于要求用户等动画放完才能算第二次。真正能分辨"手指是不是又主动推了一把"的信号是幅度：
+// 惯性衰减的 delta 幅度只会越来越小，一旦某一下比上一下明显变大（超过 wheelAccelFactor 倍），
+// 就说明是重新开始的一次主动动作；"隔了很久没有任何 wheel 事件"仍保留作兜底信号。
 let lastWheelAt = -Infinity;
+let lastWheelDelta = 0;
+let skipNextWheelAccelCheck = false;
 
 function markPossibleNewGesture(){
   if(menuState === 'expanded'){
-    awaitingCollapseScroll = true;
+    setMenuState('collapsed', '检测到再次滑动，自动收起');
   }
 }
 
 function setMenuState(state, reason){
   if(state === menuState) return;
   menuState = state;
-  if(state === 'expanded') awaitingCollapseScroll = false;
+  if(state === 'expanded') skipNextWheelAccelCheck = true; // 刚展开的这一下本身就是触发展开的那次推动，不能拿来跟"上一下"比幅度
   fabExpanded.classList.toggle('show', state === 'expanded');
   fabCollapsed.classList.toggle('show', state === 'collapsed');
   roMenuState.textContent = STATE_LABEL[state];
@@ -371,15 +390,9 @@ function onScroll(){
   lastScrollTop = st;
   lastScrollTime = now;
   lastActivityAt = now;
-  // 展开态下，只有已经被标记为"检测到新的一次滑动"（touchstart 或滚轮间隔够长）之后，
-  // 这次 scroll 事件才会被当成"再次滑动"触发收起；同一手势延续产生的 scroll 事件不会误收起。
-  if(menuState === 'expanded'){
-    if(awaitingCollapseScroll){
-      setMenuState('collapsed', '检测到再次滑动，自动收起');
-    }
-  }else{
-    evaluateShow(st);
-  }
+  // 收起判定已经挪到 markPossibleNewGesture 里，一检测到新动作就立刻收起，不等 scroll 事件；
+  // 这里只负责"隐藏态下判断是否该展开"，展开/收起态下 evaluateShow 内部会直接跳过。
+  evaluateShow(st);
 }
 screenEl.addEventListener('scroll', ()=>{
   if(!scrollTicking){
@@ -391,12 +404,19 @@ screenEl.addEventListener('scroll', ()=>{
 // 触屏：每一次新的手指接触都是一次明确的新手势，不管上一次滚动的惯性动画有没有播完
 screenEl.addEventListener('touchstart', markPossibleNewGesture, {passive:true});
 
-// 鼠标滚轮/触控板：没有明确的手势开始信号，只能用"离上一次滚轮事件隔了多久"来判断是否是新的一次滑动
-screenEl.addEventListener('wheel', ()=>{
+// 鼠标滚轮/触控板：没有明确的手势开始信号，靠两个启发式一起判断是否是新的一次滑动——
+// 1）这一下的幅度比上一下明显变大（惯性只会越滑越小，突然变大就是重新主动推了一把）；
+// 2）隔了很久完全没有 wheel 事件（兜底，应付幅度变化不明显的场景）。
+screenEl.addEventListener('wheel', e=>{
   const now = performance.now();
-  if(now - lastWheelAt > params.wheelGestureGapMs){
+  const absDelta = Math.abs(e.deltaY);
+  const longGap = now - lastWheelAt > params.wheelGestureGapMs;
+  const suddenlyBigger = !skipNextWheelAccelCheck && absDelta > 4 && absDelta > lastWheelDelta * params.wheelAccelFactor;
+  if(longGap || suddenlyBigger){
     markPossibleNewGesture();
   }
+  skipNextWheelAccelCheck = false;
+  lastWheelDelta = absDelta;
   lastWheelAt = now;
 }, {passive:true});
 
