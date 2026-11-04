@@ -161,8 +161,12 @@
       <input type="range" id="wheelGapSlider" min="100" max="1000" step="10">
     </div>
     <div class="field">
-      <label>空闲超时 <b id="idleVal"></b>ms</label>
-      <input type="range" id="idleSlider" min="300" max="5000" step="100">
+      <label>展开态空闲超时 <b id="idleExpandedVal"></b>ms（菜单展开后多久没动作就自动隐藏）</label>
+      <input type="range" id="idleExpandedSlider" min="300" max="5000" step="100">
+    </div>
+    <div class="field">
+      <label>收起态空闲超时 <b id="idleCollapsedVal"></b>ms（收起为小组件后多久没动作就自动隐藏）</label>
+      <input type="range" id="idleCollapsedSlider" min="300" max="5000" step="100">
     </div>
     <div class="field checkbox-field">
       <label><input type="checkbox" id="hideNearTopToggle"> 回到顶部附近也立即隐藏</label>
@@ -184,11 +188,12 @@
 const STORAGE_KEY = 'scrollMenuDemoParams';
 const DEFAULT_PARAMS = {
   distanceThreshold: 10, // 屏幕高度百分比，而非绝对 px —— 避免不同分辨率设备上体感不一致
-  velocityThreshold: 1500,
+  velocityThreshold: 800,
   combine: 'VEL', // 距离判据价值不大，默认只看速度；仍保留距离/组合方式供对比实验
   wheelGestureGapMs: 100, // 两次滚轮之间隔多久才算"另一次新的滑动"（兜底信号，滚轮和触屏共用同一套幅度突变判定）
   wheelAccelFactor: 2.2, // 本次滑动幅度（滚轮 deltaY 或触屏移动距离）比上一次大超过这个倍数，判定为重新主动推了一把（惯性/平移衰减只会越来越小，不会突然变大）
-  idleTimeout: 3000,
+  idleTimeoutExpanded: 1500, // 展开态更容易误认成"没在看"，空闲超时短一些
+  idleTimeoutCollapsed: 3000, // 收起态只是个小组件，不急着消失，空闲超时长一些
   hideNearTop: false
 };
 
@@ -221,14 +226,16 @@ const velSlider = document.getElementById('velSlider');
 const combineSelect = document.getElementById('combineSelect');
 const wheelAccelSlider = document.getElementById('wheelAccelSlider');
 const wheelGapSlider = document.getElementById('wheelGapSlider');
-const idleSlider = document.getElementById('idleSlider');
+const idleExpandedSlider = document.getElementById('idleExpandedSlider');
+const idleCollapsedSlider = document.getElementById('idleCollapsedSlider');
 const hideNearTopToggle = document.getElementById('hideNearTopToggle');
 const distVal = document.getElementById('distVal');
 const distPxHint = document.getElementById('distPxHint');
 const velVal = document.getElementById('velVal');
 const wheelAccelVal = document.getElementById('wheelAccelVal');
 const wheelGapVal = document.getElementById('wheelGapVal');
-const idleVal = document.getElementById('idleVal');
+const idleExpandedVal = document.getElementById('idleExpandedVal');
+const idleCollapsedVal = document.getElementById('idleCollapsedVal');
 const roScrollTop = document.getElementById('roScrollTop');
 const roVelocity = document.getElementById('roVelocity');
 const roMenuState = document.getElementById('roMenuState');
@@ -249,8 +256,10 @@ function syncUIFromParams(){
   wheelAccelVal.textContent = params.wheelAccelFactor;
   wheelGapSlider.value = params.wheelGestureGapMs;
   wheelGapVal.textContent = params.wheelGestureGapMs;
-  idleSlider.value = params.idleTimeout;
-  idleVal.textContent = params.idleTimeout;
+  idleExpandedSlider.value = params.idleTimeoutExpanded;
+  idleExpandedVal.textContent = params.idleTimeoutExpanded;
+  idleCollapsedSlider.value = params.idleTimeoutCollapsed;
+  idleCollapsedVal.textContent = params.idleTimeoutCollapsed;
   hideNearTopToggle.checked = params.hideNearTop;
 }
 syncUIFromParams();
@@ -280,9 +289,14 @@ wheelGapSlider.addEventListener('input', e=>{
   wheelGapVal.textContent = params.wheelGestureGapMs;
   saveParams();
 });
-idleSlider.addEventListener('input', e=>{
-  params.idleTimeout = +e.target.value;
-  idleVal.textContent = params.idleTimeout;
+idleExpandedSlider.addEventListener('input', e=>{
+  params.idleTimeoutExpanded = +e.target.value;
+  idleExpandedVal.textContent = params.idleTimeoutExpanded;
+  saveParams();
+});
+idleCollapsedSlider.addEventListener('input', e=>{
+  params.idleTimeoutCollapsed = +e.target.value;
+  idleCollapsedVal.textContent = params.idleTimeoutCollapsed;
   saveParams();
 });
 hideNearTopToggle.addEventListener('change', e=>{
@@ -464,9 +478,10 @@ function idleLoop(){
 
   if(menuState !== 'hidden'){
     const idleFor = now - lastActivityAt;
+    const idleTimeout = menuState === 'collapsed' ? params.idleTimeoutCollapsed : params.idleTimeoutExpanded;
     const nearTop = screenEl.scrollTop < distThresholdPx() * 0.3;
-    if(idleFor > params.idleTimeout){
-      setMenuState('hidden', `静止超过 ${params.idleTimeout}ms`);
+    if(idleFor > idleTimeout){
+      setMenuState('hidden', `静止超过 ${idleTimeout}ms`);
     }else if(params.hideNearTop && nearTop){
       setMenuState('hidden', '回到顶部附近');
     }
