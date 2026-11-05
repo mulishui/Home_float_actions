@@ -361,6 +361,8 @@ function renderLog(){
 // 仍保留作兜底信号（尤其是手指先按停、停顿一下再真正划动的场景，停顿本身就会先触发这条）。
 let smoothedScrollAbsDelta = 0;
 let skipNextScrollAccelCheck = false;
+// 是否已经过了这次手势自己的加速度峰值（至少见过一帧比平滑基准小）——见下面 onScroll 里的用法。
+let pastPeak = false;
 
 // 手指没有离开屏幕的整段触摸期间，不管是哪个状态触发的（包括触发展开的那次 flick 本身），
 // 都不该拿它自己后续的滚动去跟自己比"突然变大"——一次连续的真实手指滑动，因为
@@ -396,6 +398,11 @@ function setMenuState(state, reason){
   if(state === 'expanded'){
     skipNextScrollAccelCheck = true;
     guardedTouchId = touchActive ? activeTouchId : -1;
+    // 触发展开的这次手势很可能还在加速（人手甩动不是匀速的），只跳过一个 tick 不够：
+    // 只要这次手势还没见过"变小"（还没过加速度峰值），哪怕它接下来好几帧继续比前几帧更大，
+    // 也只是同一次手势仍在加速，不能当成"重新推了一把"；真正判断"突然变大"要等这次手势
+    // 自己先衰减过一次（哪怕只有一帧）才有意义——衰减中又冒出一次更大的跳变，才说明是新的一次。
+    pastPeak = false;
   }
   fabExpanded.classList.toggle('show', state === 'expanded');
   fabCollapsed.classList.toggle('show', state === 'collapsed');
@@ -441,10 +448,13 @@ function onScroll(){
   // 划动），哪怕这一帧幅度和平滑趋势差不多也该算新的一次。
   const sameGuardedTouch = touchActive && activeTouchId === guardedTouchId;
   const longGap = !sameGuardedTouch && dt > params.wheelGestureGapMs;
-  const suddenlyBigger = !sameGuardedTouch && !skipNextScrollAccelCheck && absDelta > 2 && absDelta > smoothedScrollAbsDelta * params.wheelAccelFactor;
+  // 手势还在加速爬升阶段时，这一帧比平滑基准大是正常现象（基准本来就滞后于还在加速的真实速度），
+  // 不是"重新推了一把"；只有这次手势已经衰减过至少一帧（pastPeak），后面又冒出明显变大，才算数。
+  const suddenlyBigger = !sameGuardedTouch && !skipNextScrollAccelCheck && pastPeak && absDelta > 2 && absDelta > smoothedScrollAbsDelta * params.wheelAccelFactor;
   if(absDelta > 2 && (longGap || suddenlyBigger)){
     markPossibleNewGesture();
   }
+  if(absDelta < smoothedScrollAbsDelta) pastPeak = true;
   skipNextScrollAccelCheck = false;
   smoothedScrollAbsDelta = smoothedScrollAbsDelta * 0.7 + absDelta * 0.3;
   lastScrollTop = st;
