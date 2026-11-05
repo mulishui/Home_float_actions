@@ -6,14 +6,16 @@
 <title>滚动悬浮菜单 Demo · 阈值实验工具</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
   body{
     font-family:"SF Pro Text","SF Pro Display",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
-    background:#f5f7fa;color:#1c1d21;
+    background:#f5f7fa;color:#1c1d21;overflow:hidden;
   }
-  .stage{display:flex;gap:24px;justify-content:center;align-items:flex-start;flex-wrap:wrap;padding:32px 16px 60px}
+  /* 非移动端：整屏居中，内容不够放就靠 JS 整体缩放塞进一屏，避免出现页面级滚动条跟手机模拟屏幕的滚动抢手势 */
+  .stage{display:flex;justify-content:center;align-items:center;height:100vh;padding:16px;overflow:hidden}
+  .stage-fit{display:flex;gap:24px;align-items:flex-start;flex-wrap:nowrap;transform-origin:center center}
 
   .phone-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;flex:0 0 auto}
-  .hint{text-align:center;font-size:12px;color:#a8abb3;max-width:340px}
 
   /* 手机尺寸按 iPhone 17 Pro 逻辑分辨率模拟（402 x 874pt），素材按 @2x 导出，刚好 804px 宽，1:1 对齐无需额外换算 */
   .phone{
@@ -90,17 +92,12 @@
   .log-meta{color:#a8abb3}
   .log-empty{padding:12px;text-align:center;color:#a8abb3;font-size:12px}
 
-  @media (max-width:760px){
-    .stage{align-items:center}
-    .panel{width:100%;max-width:340px}
-  }
-
   /* 真机上直接全屏当成"真实 app 页面"测试，隐藏说明文字/调参面板/手机壳装饰，只留可交互的屏幕内容 */
   @media (max-width:600px){
-    body{overflow:hidden}
-    .stage{padding:0;gap:0;height:100dvh}
+    .stage{padding:0;height:100dvh}
+    .stage-fit{gap:0;transform:none !important}
     .phone-wrap{width:100%;height:100%;gap:0}
-    .hint,.panel{display:none}
+    .panel{display:none}
     .phone{
       width:100%;height:100dvh;border-radius:0;box-shadow:none;background:#f5f7fa;
     }
@@ -109,8 +106,8 @@
 </head>
 <body>
 <div class="stage">
+ <div class="stage-fit" id="stageFit">
   <div class="phone-wrap">
-    <div class="hint">快速滚动（滚轮/触控板/手指拖动均可）触发悬浮菜单；菜单展开后哪怕列表还在惯性滚动，只要没有新的一次滑动动作，菜单仍保持展开，光是手指按一下把列表按停（不划动）不算；一旦列表再次明显加速滚动，或停顿后又开始滚动，立即收起为小组件，不用等上一次惯性放完；点一下可以展开；一直不操作会自动消失（手机尺寸按 iPhone 17 Pro 402×874pt 模拟）</div>
     <div class="phone">
       <div class="screen" id="screen">
         <div class="list-wrap">
@@ -181,6 +178,7 @@
     <div class="log-head">事件日志（最近 20 条）</div>
     <div class="log" id="logList"><div class="log-empty">还没有触发记录</div></div>
   </aside>
+ </div>
 </div>
 
 <script>
@@ -503,6 +501,21 @@ function idleLoop(){
   requestAnimationFrame(idleLoop);
 }
 requestAnimationFrame(idleLoop);
+
+/* ---- 非移动端整体缩放，保证手机模拟屏 + 调参面板都在一屏内，不出现页面级滚动条 ---- */
+const stageFit = document.getElementById('stageFit');
+function fitStage(){
+  if(window.matchMedia('(max-width:600px)').matches){
+    stageFit.style.transform = '';
+    return;
+  }
+  stageFit.style.transform = 'scale(1)';
+  const rect = stageFit.getBoundingClientRect();
+  const scale = Math.min(1, (window.innerWidth - 32) / rect.width, (window.innerHeight - 32) / rect.height);
+  stageFit.style.transform = `scale(${scale})`;
+}
+window.addEventListener('resize', fitStage);
+fitStage();
 </script>
 </body>
 </html>
